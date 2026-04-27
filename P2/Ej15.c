@@ -20,14 +20,9 @@ entry store[MAX_ITEMS];
 pthread_mutex_t store_lock = PTHREAD_MUTEX_INITIALIZER;
 
 /*
- * Para probar, usar netcat. Ej:
+ * Para probar, usar netcat.
  *
- *      $ nc localhost 4040
- *      NUEVO
- *      0
- *      NUEVO
- *      1
- *      CHAU
+ *      $ nc localhost 3942
  */
 
 // Funciones de búsqueda
