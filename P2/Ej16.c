@@ -3,33 +3,37 @@
 #include <unistd.h>
 #include <string.h>
 #include <pthread.h>
-
+#include <sys/epoll.h> 
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netinet/ip.h>
-#define MAX_VECT 50
-#define MAX_ITEMS 100
 
-typedef struct entry{
+#define MAX_ITEMS 100
+#define MAX_THREADS 4
+#define MAX_EVENTOS 10
+
+// Estructura para el Key-Value Store
+typedef struct entry {
     char *key;
     char *value;
 } entry;
 
+// Memoria global compartida
 entry store[MAX_ITEMS];
 pthread_mutex_t store_lock = PTHREAD_MUTEX_INITIALIZER;
+int epfd; // El fd de epoll es global para que todos los hilos lo vean
 
-/*
- * Para probar, usar netcat.
- *
- *      $ nc localhost 3942
- */
+void quit(char *s) {
+    perror(s);
+    abort();
+}
 
-// Funciones de búsqueda
+// --- FUNCIONES DEL STORE (CON LOCKS) ---
 
 void store_put(char* key, char* val) {
     pthread_mutex_lock(&store_lock);
-    
+    // 1. Buscar si existe para pisar
     for (int i = 0; i < MAX_ITEMS; i++) {
         if (store[i].key != NULL && strcmp(store[i].key, key) == 0) {
             free(store[i].value);
@@ -38,7 +42,7 @@ void store_put(char* key, char* val) {
             return;
         }
     }
-
+    // 2. Si no existe, buscar lugar vacío
     for (int i = 0; i < MAX_ITEMS; i++) {
         if (store[i].key == NULL) {
             store[i].key = strdup(key);
@@ -63,7 +67,6 @@ char* store_get(char* key) {
     return NULL;
 }
 
-
 void store_del(char* key) {
     pthread_mutex_lock(&store_lock);
     for (int i = 0; i < MAX_ITEMS; i++) {
@@ -78,143 +81,141 @@ void store_del(char* key) {
     pthread_mutex_unlock(&store_lock);
 }
 
-char* vector[MAX_VECT];
+// --- LÓGICA DE RED ---
 
-void quit(char *s)
-{
-	perror(s);
-	abort();
+// Lee del socket hasta encontrar un \n
+int fd_readline(int fd, char *buf) {
+    int rc;
+    int i = 0;
+    while ((rc = read(fd, buf + i, 1)) > 0) {
+        if (buf[i] == '\n') break;
+        i++;
+    }
+    if (rc < 0) return rc;
+    buf[i] = 0;
+    return i;
 }
 
-int U = 0;
+// Procesa un solo pedido y devuelve 1 si el cliente sigue conectado
+int handle_conn(int csock) {
+    char buf[200];
+    int rc = fd_readline(csock, buf);
 
-int fd_readline(int fd, char *buf)
-{
-	int rc;
-	int i = 0;
+    if (rc <= 0) return 0; // Cliente desconectado o error
 
-	/*
-	 * Leemos de a un caracter (no muy eficiente...) hasta
-	 * completar una línea.
-	 */
-	while ((rc = read(fd, buf + i, 1)) > 0) {
-		if (buf[i] == '\n')
-			break;
-		i++;
-	}
+    char *cmd = strtok(buf, " ");
+    char *key = strtok(NULL, " ");
+    char *val = strtok(NULL, " \n\r"); // Limpiamos el val de posibles saltos de linea
 
-	if (rc < 0)
-		return rc;
+    if (!cmd || !key) {
+        write(csock, "EINVAL\n", 7);
+        return 1;
+    }
 
-	buf[i] = 0;
-	return i;
-}
-
-void handle_conn(int csock)
-{
-	char buf[200];
-	int rc;
-
-	while (1) {
-		/* Atendemos pedidos, uno por linea */
-		rc = fd_readline(csock, buf);
-		if (rc < 0)
-			quit("read... raro");
-
-		if (rc == 0) {
-			/* linea vacia, se cerró la conexión */
-			close(csock);
-			return;
-		}
-
-        char *cmd = strtok(buf, " ");
-        char *key = strtok(NULL, " ");
-        char *val = strtok(NULL, " ");
-
-		if (!strcmp(cmd, "PUT")) {
-            store_put(key, val);
-			write(csock, "OK\n", 3);
-		} else if (!strcmp(cmd, "GET")) {
-            char* busqueda = store_get(key);
-            if(busqueda != NULL){
-                char reply[200];
-                sprintf(reply, "OK %s\n", busqueda);
-                write(csock, reply, strlen(reply));
-                free(busqueda);
-            } else {
-                write(csock, "NOTFOUND\n", 9);
-            }
-		} else if (!strcmp(cmd, "DEL")){
-            store_del(key);
-            write(csock, "OK\n", 3);
+    if (!strcmp(cmd, "PUT") && val) {
+        store_put(key, val);
+        write(csock, "OK\n", 3);
+    } else if (!strcmp(cmd, "GET")) {
+        char* busqueda = store_get(key);
+        if (busqueda) {
+            char reply[250];
+            sprintf(reply, "OK %s\n", busqueda);
+            write(csock, reply, strlen(reply));
+            free(busqueda);
         } else {
-            write(csock, "EINVAL\n", 7);
+            write(csock, "NOTFOUND\n", 9);
         }
-	}
-    close(csock);
+    } else if (!strcmp(cmd, "DEL")) {
+        store_del(key);
+        write(csock, "OK\n", 3);
+    } else {
+        write(csock, "EINVAL\n", 7);
+    }
+    return 1;
 }
 
-void* atendedor(void* arg){
-    int csock = *(int*)arg;
-    free(arg);
-    handle_conn(csock);
+// Función que ejecutan los 4 hilos
+void* wait_for_clients(void* arg) {
+    int lsock = (int)(long)arg; // Recuperamos el socket de escucha
+    struct epoll_event eventos[MAX_EVENTOS];
+
+    while (1) {
+        // Todos los hilos esperan acá. El Kernel despierta a uno solo por evento.
+        int nfds = epoll_wait(epfd, eventos, MAX_EVENTOS, -1);
+        if (nfds < 0) continue;
+
+        for (int i = 0; i < nfds; i++) {
+            if (eventos[i].data.fd == lsock) {
+                // CASO 1: Nueva conexión 
+                int csock = accept(lsock, NULL, NULL);
+                if (csock < 0) continue;
+
+                struct epoll_event ev;
+                // ONESHOT  desactiva el FD del epoll apenas se activa
+                ev.events = EPOLLIN | EPOLLET | EPOLLONESHOT;
+                ev.data.fd = csock;
+                epoll_ctl(epfd, EPOLL_CTL_ADD, csock, &ev);
+            } else {
+                // CASO 2: Atendemos
+                int current_csock = eventos[i].data.fd;
+                
+                if (handle_conn(current_csock)) {
+                    // Si el cliente sigue vivo, rearmamos el ONESHOT
+                    struct epoll_event ev;
+                    ev.events = EPOLLIN | EPOLLET | EPOLLONESHOT;
+                    ev.data.fd = current_csock;
+                    epoll_ctl(epfd, EPOLL_CTL_MOD, current_csock, &ev);
+                } else {
+                    // Si se desconectó, cerramos (epoll lo quita solo al cerrar)
+                    close(current_csock);
+                }
+            }
+        }
+    }
     return NULL;
 }
 
-void wait_for_clients(int lsock){
-    while(1){
-        int* csock = malloc(sizeof(int)); // puntero para el thread
+int mk_lsock() {
+    struct sockaddr_in sa;
+    int lsock = socket(AF_INET, SOCK_STREAM, 0);
+    if (lsock < 0) quit("socket");
 
-        /* Esperamos una conexión, no nos interesa de donde viene */
-        *csock = accept(lsock, NULL, NULL);
-        if (*csock < 0)
-            quit("accept");
+    int yes = 1;
+    setsockopt(lsock, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof yes);
 
-        pthread_t m1;
-        pthread_create(&m1, NULL, atendedor, csock);
-        pthread_join(m1, NULL);
-        pthread_detach(m1);
+    sa.sin_family = AF_INET;
+    sa.sin_port = htons(3942);
+    sa.sin_addr.s_addr = htonl(INADDR_ANY);
+
+    if (bind(lsock, (struct sockaddr *)&sa, sizeof sa) < 0) quit("bind");
+    if (listen(lsock, 10) < 0) quit("listen");
+
+    return lsock;
+}
+
+int main() {
+    memset(store, 0, sizeof(store));
+    int lsock = mk_lsock();
+
+    // Creamos la instancia de epoll
+    epfd = epoll_create1(0);
+    if (epfd < 0) quit("epoll_create");
+
+    // Agregamos el socket de escucha al epoll
+    struct epoll_event ev;
+    ev.events = EPOLLIN; // El lsock no suele necesitar ONESHOT ni ET
+    ev.data.fd = lsock;
+    epoll_ctl(epfd, EPOLL_CTL_ADD, lsock, &ev);
+
+    // Lanzamos los 4 hilos trabajadores
+    pthread_t tids[MAX_THREADS];
+    for (int i = 0; i < MAX_THREADS; i++) {
+        pthread_create(&tids[i], NULL, wait_for_clients, (void*)(long)lsock);
     }
-}
 
-/* Crea un socket de escucha en puerto 3942 TCP */
-int mk_lsock()
-{
-	struct sockaddr_in sa;
-	int lsock;
-	int rc;
-	int yes = 1;
+    for (int i = 0; i < MAX_THREADS; i++) {
+        pthread_join(tids[i], NULL);
+    }
 
-	/* Crear socket */
-	lsock = socket(AF_INET, SOCK_STREAM, 0);
-	if (lsock < 0)
-		quit("socket");
-
-	/* Setear opción reuseaddr... normalmente no es necesario */
-	if (setsockopt(lsock, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof yes) == 1)
-		quit("setsockopt");
-
-	sa.sin_family = AF_INET;
-	sa.sin_port = htons(3942);
-	sa.sin_addr.s_addr = htonl(INADDR_ANY);
-
-	/* Bindear al puerto 3942 TCP, en todas las direcciones disponibles */
-	rc = bind(lsock, (struct sockaddr *)&sa, sizeof sa);
-	if (rc < 0)
-		quit("bind");
-
-	/* Setear en modo escucha */
-	rc = listen(lsock, 10);
-	if (rc < 0)
-		quit("listen");
-
-	return lsock;
-}
-
-int main()
-{
-    memset(store, 0, sizeof(store)); // Inicializar el store
-	int lsock;
-	lsock = mk_lsock();
-	wait_for_clients(lsock);
+    return 0;
 }
