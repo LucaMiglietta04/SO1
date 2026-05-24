@@ -24,7 +24,7 @@ void barrier_wait(struct barrier *b){
     if (b->hilos_esperando == b->hilos_totales){
 
         b->hilos_esperando = 0;
-//        b->ciclo++;
+        b->ciclo++;
         pthread_cond_broadcast(&(b->cv));
 
     } else {
