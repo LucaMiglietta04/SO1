@@ -1,6 +1,9 @@
 #ifndef RWLOCK_H
 #define RWLOCK_H
 
+#include <stdio.h>
+#include <unistd.h>
+#include <stdlib.h>
 #include <pthread.h>
 
 typedef struct {
@@ -15,9 +18,13 @@ typedef struct {
 } rwlock_t;
 
 void rwlock_init(rwlock_t *rw);
+
 void rwlock_read_lock(rwlock_t *rw);
+
 void rwlock_read_unlock(rwlock_t *rw);
+
 void rwlock_write_lock(rwlock_t *rw);
+
 void rwlock_write_unlock(rwlock_t *rw);
 
-#endif
+#endif 

@@ -1,4 +1,17 @@
+#include <stdio.h>
+#include <unistd.h>
+#include <stdlib.h>
+#include <pthread.h>
+
+#include "rwlock.h"
+
+#define M 5
+#define N 5
+#define ARRLEN 10240
+int arr[ARRLEN];
+
 rwlock_t lock; // Instancia de nuestro lock genérico
+
 
 void *escritor(void *arg) {
     int i;
@@ -30,4 +43,17 @@ void *lector(void *arg) {
         rwlock_read_unlock(&lock); // <--- Desbloqueo de Lectura
     }
     return NULL;
+}
+
+int main()
+{
+    rwlock_init(&lock);
+    pthread_t lectores[M], escritores[N];
+    int i;
+    for (i = 0; i < M; i++)
+    pthread_create(&lectores[i], NULL, lector, i + (void*)0);
+    for (i = 0; i < N; i++)
+        pthread_create(&escritores[i], NULL, escritor, i + (void*)0);
+    pthread_join(lectores[0], NULL); /* Espera para siempre */
+    return 0;
 }
