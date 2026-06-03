@@ -7,49 +7,53 @@
 
 void my_cond_init(my_cond_t *cond) {
     // Inicializa el semáforo en 0, cuando se la haga wait quedará lockeado.
-    sem_init(&(cond->sem), 0, 0);
-    pthread_mutex_init(&(cond->mutex_cond), NULL);
+    sem_init(&cond->signals, 0, 0);
+    sem_init(&cond->lock, 0,1); 
+    sem_init(&cond->check, 0,0); 
     cond->hilos_esperando = 0;
 }
 
 void my_cond_wait(my_cond_t *cond, pthread_mutex_t *mutex) {
-    pthread_mutex_lock(&(cond->mutex_cond));
+    sem_wait(&cond->lock);
     (cond->hilos_esperando)++;
-    pthread_mutex_unlock(&(cond->mutex_cond));
+    sem_post(&cond->lock);
     // suelta el mutex.
     pthread_mutex_unlock(mutex);
     // Baja el semáforo y espera un signal o un broadcast.
-    sem_wait(&(cond->sem));
+    sem_wait(&cond->signals);
+    // Enviamos la señal de salida.
+    sem_post(&cond->check);
     // pide el mutex.
     pthread_mutex_lock(mutex);
 }
 
 void my_cond_signal(my_cond_t *cond) {
     // Levanta el semáforo.
-    pthread_mutex_lock(&(cond->mutex_cond));
+    sem_wait(&cond->lock);
     if (cond->hilos_esperando > 0){
-        (cond->hilos_esperando)--;
-        sem_post(&(cond->sem));
+        cond->hilos_esperando--;
+        sem_post(&cond->signals);
     }
-    pthread_mutex_unlock(&(cond->mutex_cond));
+    sem_post(&cond->lock);
 }
 
 void my_cond_broadcast(my_cond_t *cond){
-    pthread_mutex_lock(&(cond->mutex_cond));
+    sem_wait(&cond->lock);
+    for(int i = 0; i < cond->hilos_esperando; i++)
+        sem_post(&cond->signals);
     while(cond->hilos_esperando > 0){
         cond->hilos_esperando--;
-        sem_post(&(cond->sem));
+        sem_wait(&cond->check);
     }
-    pthread_mutex_unlock(&(cond->mutex_cond));
+    sem_post(&cond->lock);
 }
 
 
 void my_cond_destroy(my_cond_t *cond) {
     // Destruye el semáforo.
-    sem_destroy(&(cond->sem));
-    pthread_mutex_destroy(&(cond->mutex_cond));
+    sem_destroy(&cond->signals);
+    sem_destroy(&cond->lock);
 }
-
 
 
 

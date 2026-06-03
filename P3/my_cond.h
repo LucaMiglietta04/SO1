@@ -5,8 +5,7 @@
 #include <semaphore.h>
 
 typedef struct _my_cond_t {
-    sem_t sem;
-    pthread_mutex_t mutex_cond;
+    sem_t signals, lock, check;
     int hilos_esperando; 
 } my_cond_t;
 
