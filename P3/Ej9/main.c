@@ -64,6 +64,5 @@ int main() {
         pthread_join(hilos[i], NULL);
     }
 
-    printf("Fin hilitos\n");
     return 0;
 }
