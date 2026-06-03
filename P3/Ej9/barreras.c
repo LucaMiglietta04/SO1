@@ -6,6 +6,11 @@
 
 #include "barreras.h"
 
+/* Llevamos dentro de la estructura un contador para la cantidad de hilos que llegaron a la barrera, y la cantidad total que deben llegar,
+como también el ciclo actual de los hilos. Esto último es necesario debido a que se puede dar el caso en el que, una vez hayan llegado todos los hilos
+a la barrera, al no liberarse todos simultáneamente debido al lock, un hilo puede recorrer un ciclo entero y llegar a la barrera antes de
+que se terminen de liberar el resto, generando un deadlock.*/
+
 void barrier_init(struct barrier *b, int n){
     b->hilos_esperando = 0;
     b->hilos_totales = n;

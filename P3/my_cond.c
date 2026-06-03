@@ -52,13 +52,6 @@ void my_cond_destroy(my_cond_t *cond) {
 
 
 
-/*
-
-*/
-
-
-
-
 
 
 
