@@ -14,18 +14,20 @@ struct barrier barrera;
 
 static inline int min(int a, int b) { return a < b ? a : b; }
 
+/* Dado un array de [n], devuelve el punto de corte [i] de los [m] totales. */
 static inline int cut(int n, int i, int m) { 
     return i * (n/m) + min(i, n % m); 
 }
 
-void calor(float *arr, int lo, int hi, float *arr2_ptr) { 
-    int i;
-    for (i = lo; i < hi; i++) { 
-        float m = arr[i]; 
-        float l = i > 0 ? arr[i-1] : m; 
-        float r = i < N-1 ? arr[i+1] : m; 
-        arr2_ptr[i] = m + (l - m)/1000.0 + (r - m)/1000.0;
-    } 
+void calor(float *in, int lo, int hi, float *out)
+{
+	int i;
+	for (i = lo; i < hi; i++) {
+		int m = in[i];
+		int l = i > 0   ? in[i-1] : m;
+		int r = i < N-1 ? in[i+1] : m;
+		out[i] = m + (l - m)/1000.0 + (r - m)/1000.0;
+	}
 }
 
 void * thr(void *arg) { 
@@ -48,21 +50,32 @@ void * thr(void *arg) {
     return NULL;
 }
 
-int main() {
-    pthread_t hilos[W];
+int main()
+{
+	pthread_t w[W];
+	float f;
+	int i;
 
-    for(int i = 0; i < N; i++) arr1[i] = 25.0;
-    arr1[N/2] = 80.0;
+	/*
+	 * No cambiamos la semilla, por lo que este programa
+	 * debería ser determinista
+	 */
+	for (i = 0; i < N; i++)
+		arr1[i] = rand() / 10000.0;
 
     barrier_init(&barrera, W);
+	for (i = 0; i < W; i++)
+		pthread_create(&w[i], NULL, thr, i + (void*)0);
 
-    for (long i = 0; i < W; i++) {
-        pthread_create(&hilos[i], NULL, thr, (void*)i);
-    }
+	for (i = 0; i < W; i++)
+		pthread_join(w[i], NULL);
 
-    for (int i = 0; i < W; i++) {
-        pthread_join(hilos[i], NULL);
-    }
+	f = 0;
+	for (i = 0; i < N; i++)
+		f += arr1[i];
+	f /= N;
 
-    return 0;
+	/* Imprimimos temperatura promedio, siempre debería dar igual */
+	printf("Temp promedio: %f\n", f);
+	return 0;
 }
