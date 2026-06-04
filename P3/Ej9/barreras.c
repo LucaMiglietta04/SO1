@@ -35,7 +35,6 @@ void barrier_wait(struct barrier *b){
     } else {
         while(ciclo_actual == b->ciclo)
             pthread_cond_wait(&(b->cv), &(b->lock));
-    }
-    
+    }    
     pthread_mutex_unlock(&(b->lock));
 }
