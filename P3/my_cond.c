@@ -33,6 +33,7 @@ void my_cond_signal(my_cond_t *cond) {
     if (cond->hilos_esperando > 0){
         cond->hilos_esperando--;
         sem_post(&cond->signals);
+        sem_wait(&cond->check);
     }
     sem_post(&cond->lock);
 }
